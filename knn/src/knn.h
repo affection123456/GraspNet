@@ -3,54 +3,61 @@
 
 #ifdef WITH_CUDA
 #include "cuda/vision.h"
-#include <THC/THC.h>
-extern THCState *state;
+#include <torch/extension.h>
+#include <ATen/cuda/CUDAContext.h>
 #endif
 
+int knn(at::Tensor& ref, at::Tensor& query, at::Tensor& idx) {
+    // 检查输入张量的维度
+    TORCH_CHECK(ref.dim() == 3, "ref张量必须是3维的");
+    TORCH_CHECK(query.dim() == 3, "query张量必须是3维的");
+    TORCH_CHECK(idx.dim() == 3, "idx张量必须是3维的");
+    TORCH_CHECK(ref.size(0) == query.size(0), "ref和query的batch维度必须相等");
+    TORCH_CHECK(ref.size(1) == query.size(1), "ref和query的特征维度必须相等");
+
+    // 获取张量的维度信息
+    auto batch = ref.size(0);
+    auto dim = ref.size(1);
+    auto ref_nb = ref.size(2);
+    auto query_nb = query.size(2);
+    auto k = idx.size(1);
+
+    // 获取指针
+    auto* ref_dev = ref.data_ptr<float>();
+    auto* query_dev = query.data_ptr<float>();
+    auto* idx_dev = idx.data_ptr<long>();
 
 
-int knn(at::Tensor& ref, at::Tensor& query, at::Tensor& idx)
-{
-
-    // TODO check dimensions
-    long batch, ref_nb, query_nb, dim, k;
-    batch = ref.size(0);
-    dim = ref.size(1);
-    k = idx.size(1);
-    ref_nb = ref.size(2);
-    query_nb = query.size(2);
-
-    float *ref_dev = ref.data<float>();
-    float *query_dev = query.data<float>();
-    long *idx_dev = idx.data<long>();
-
-
-
-
-  if (ref.type().is_cuda()) {
+if (ref.is_cuda()) {
 #ifdef WITH_CUDA
-    // TODO raise error if not compiled with CUDA
-    float *dist_dev = (float*)THCudaMalloc(state, ref_nb * query_nb * sizeof(float));
+    // 使用CUDA设备分配内存
+    float* dist_dev = nullptr;
+    cudaError_t alloc_err = cudaMalloc(reinterpret_cast<void**>(&dist_dev), ref_nb * query_nb * sizeof(float));
+    TORCH_CHECK(alloc_err == cudaSuccess, "CUDA内存分配失败: ", cudaGetErrorString(alloc_err));
 
-    for (int b = 0; b < batch; b++)
-    {
-    // knn_device(ref_dev + b * dim * ref_nb, ref_nb, query_dev + b * dim * query_nb, query_nb, dim, k,
-    //   dist_dev, idx_dev + b * k * query_nb, THCState_getCurrentStream(state));
-      knn_device(ref_dev + b * dim * ref_nb, ref_nb, query_dev + b * dim * query_nb, query_nb, dim, k,
-      dist_dev, idx_dev + b * k * query_nb, c10::cuda::getCurrentCUDAStream());
+    // 循环处理每个batch
+    for (int b = 0; b < batch; b++) {
+        knn_device(
+            ref_dev + b * dim * ref_nb, ref_nb,
+            query_dev + b * dim * query_nb, query_nb,
+            dim, k, dist_dev,
+            idx_dev + b * k * query_nb,
+            c10::cuda::getCurrentCUDAStream()
+        );
     }
-    THCudaFree(state, dist_dev);
+
+    // 释放分配的内存
+    cudaFree(dist_dev);
+
+    // 检查CUDA调用是否发生错误
     cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess)
-    {
-        printf("error in knn: %s\n", cudaGetErrorString(err));
-        THError("aborting");
-    }
+    TORCH_CHECK(err == cudaSuccess, "KNN计算时发生CUDA错误: ", cudaGetErrorString(err));
+
     return 1;
 #else
-    AT_ERROR("Not compiled with GPU support");
+    AT_ERROR("未编译为支持GPU的版本");
 #endif
-  }
+}
 
 
     float *dist_dev = (float*)malloc(ref_nb * query_nb * sizeof(float));

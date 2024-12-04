@@ -108,8 +108,13 @@ def vis_grasps(gg, cloud):
     gg.nms()
     gg.sort_by_score()
     gg = gg[:50]
+    print(gg)
     grippers = gg.to_open3d_geometry_list()
-    o3d.visualization.draw_geometries([cloud, *grippers])
+    # o3d.visualization.draw_geometries([cloud, *grippers])
+
+    # 将合并后的点云保存为文件
+    o3d.io.write_point_cloud("merged_cloud.ply", cloud)
+
 
 def demo(data_dir):
     net = get_net()
